@@ -1,4 +1,5 @@
 # ask - chat with DeepSeek from the terminal. 
+License: ( 2026/08/25) No real license, but this is just one single bash script, and it is fully open Source
 
 ## Description:
 
@@ -37,6 +38,7 @@ So, roughly 60% Python / 40% bash — Python does all the JSON work, bash does t
 ## Files:
 
   Bash script : Place the ask bash script in '~/.local/bin/ask'
+  ( make it executable with : chmod +x ~/.local/bin/ask )
   
   Config:   ~/.config/ask/config
   History:  ~/.local/share/ask/history.jsonl (if history is enabled)
@@ -57,3 +59,4 @@ the history file will be automatically created when history is enabled in the co
 
 Note: comments in the config file must be on their own line,
 starting with //. Do not append comments to a value line.
+
