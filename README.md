@@ -26,7 +26,7 @@ Options:
 - curl (API calls)
 - coreutils (mkdir, cat, rm, touch, printf, read) — present on any Linux/macOS
 - Network access to api.deepseek.com
-- DEEPSEEK_API_KEY env var set (only needed for asking questions, not for -h/-r/-e/-s/-d)
+- DEEPSEEK_API_KEY env var set
 - $EDITOR optional — only used by ask -e, falls back to vi
 
 set your deepseek API key in your ~/.bashrc with:
