@@ -1,0 +1,339 @@
+#!/bin/bash
+
+HISTORY_DIR="$HOME/.local/share/ask"
+HISTORY_FILE="$HISTORY_DIR/history.jsonl"
+CONFIG_DIR="$HOME/.config/ask"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Create directories
+mkdir -p "$HISTORY_DIR"
+mkdir -p "$CONFIG_DIR"
+
+# Create the default config file
+create_default_config() {
+    cat > "$CONFIG_FILE" <<'EOF'
+// DeepSeek ask configuration (~/.config/ask/config).
+// Adjust the values below; comments must be on their own line,
+// starting with //. Do NOT append comments to a value line.
+
+{
+  // Role / system prompt of the AI.
+  "role": "You are a helpful assistant.",
+
+  // Model: deepseek-v4-flash (default) or deepseek-v4-pro.
+  "model": "deepseek-v4-flash",
+
+  // Sampling temperature (0-2): higher is more random, lower is more focused.
+  "temperature": 1,
+
+  // Nucleus sampling (0-1): prefer adjusting temperature or top_p, not both.
+  "top_p": 1,
+
+  // Thinking mode: enabled or disabled.
+  "thinking": "enabled",
+
+  // Reasoning effort: low, high, or max (only used when thinking is enabled).
+  "reasoning_effort": "high",
+
+  // Output format: text or json_object.
+  "response_format": "text",
+
+  // Save the conversation history for future questions: y or n.
+  "save_history": "n"
+}
+EOF
+    echo "Created config file: $CONFIG_FILE"
+}
+
+# Create config file on first run
+if [ ! -f "$CONFIG_FILE" ]; then
+    create_default_config
+fi
+
+# Show help
+if [ "$1" = "-h" ]; then
+    cat <<EOF
+ask - chat with DeepSeek from the terminal.
+
+Ask a question and DeepSeek answers, keeping the conversation history
+so follow-up questions have context.
+
+Files:
+  Config:   $CONFIG_FILE
+  History:  $HISTORY_FILE
+
+Options:
+  -h   Show this help.
+  -r   Clear the conversation history.
+  -e   Edit the config file in \$EDITOR (default: vi).
+  -s   Show current config settings.
+  -d   Restore the default config (asks for confirmation).
+
+Config parameters (set in $CONFIG_FILE):
+  role              System prompt defining the AI's persona.
+  model             deepseek-v4-flash (default) or deepseek-v4-pro.
+  temperature       Sampling temperature (0-2); higher is more random.
+  top_p             Nucleus sampling (0-1); prefer temperature or top_p, not both.
+  thinking          Thinking mode: enabled or disabled.
+  reasoning_effort  Reasoning effort: low, high, or max (thinking only).
+  response_format   Output format: text or json_object.
+  save_history      Keep conversation history for future context: y or n.
+
+Note: comments in the config file must be on their own line,
+starting with //. Do not append comments to a value line.
+EOF
+    exit 0
+fi
+
+# Refresh history
+if [ "$1" = "-r" ]; then
+    rm -f "$HISTORY_FILE"
+    echo "Conversation history cleared."
+    exit 0
+fi
+
+# Edit config
+if [ "$1" = "-e" ]; then
+    ${EDITOR:-vi} "$CONFIG_FILE"
+    exit $?
+fi
+
+# Show config
+if [ "$1" = "-s" ]; then
+    python3 - "$CONFIG_FILE" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+lines = []
+with open(path, "r", encoding="utf-8") as f:
+    for line in f:
+        if line.strip().startswith("//"):
+            continue
+        lines.append(line)
+
+try:
+    config = json.loads("".join(lines))
+except Exception as e:
+    print(f"Error: could not parse {path}: {e}")
+    sys.exit(1)
+
+for key, value in config.items():
+    print(f"{key}: {value}")
+PY
+    exit 0
+fi
+
+# Reset config to defaults
+if [ "$1" = "-d" ]; then
+    read -rp "Restore default config? This overwrites your current config. (y/n) " answer
+    if [ "$answer" = "y" ]; then
+        rm -f "$CONFIG_FILE"
+        create_default_config
+    else
+        echo "Aborted - config left unchanged."
+    fi
+    exit 0
+fi
+
+if [ -z "$DEEPSEEK_API_KEY" ]; then
+    echo "Error: DEEPSEEK_API_KEY is not set."
+    exit 1
+fi
+
+# Check for a question
+if [ $# -eq 0 ]; then
+    echo 'Usage: ask "your question"'
+    echo "       ask -h        show this help"
+    echo "       ask -r        clear conversation history"
+    echo "       ask -e        edit config file"
+    echo "       ask -s        show current config"
+    echo "       ask -d        restore default config"
+    exit 1
+fi
+
+QUESTION="$*"
+
+# Read the save_history setting from the config
+SAVE_HISTORY=$(python3 - "$CONFIG_FILE" <<'PY'
+import json
+import sys
+
+lines = []
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    for line in f:
+        if line.strip().startswith("//"):
+            continue
+        lines.append(line)
+
+try:
+    config = json.loads("".join(lines))
+except Exception:
+    print("n")
+    sys.exit(0)
+
+print("y" if str(config.get("save_history", "n")).lower() == "y" else "n")
+PY
+)
+
+# Keep a history file only when history saving is enabled
+if [ "$SAVE_HISTORY" = "y" ]; then
+    touch "$HISTORY_FILE"
+else
+    rm -f "$HISTORY_FILE"
+fi
+
+# Build the JSON messages array from the config role and the history
+MESSAGES=$(python3 - "$CONFIG_FILE" "$HISTORY_FILE" "$QUESTION" "$SAVE_HISTORY" <<'PY'
+import json
+import sys
+
+def load_config(path):
+    lines = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip().startswith("//"):
+                continue
+            lines.append(line)
+    return json.loads("".join(lines))
+
+try:
+    config = load_config(sys.argv[1])
+except Exception as e:
+    print(f"Error: could not parse config: {e}")
+    sys.exit(1)
+
+history_file = sys.argv[2]
+question = sys.argv[3]
+save_history = sys.argv[4].lower() == "y"
+
+messages = []
+role = (config.get("role") or "").strip()
+if role:
+    messages.append({"role": "system", "content": role})
+
+if save_history:
+    with open(history_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                messages.append(json.loads(line))
+
+messages.append({
+    "role": "user",
+    "content": question
+})
+
+print(json.dumps(messages))
+PY
+)
+
+# Send conversation to DeepSeek
+RESPONSE=$(curl -s https://api.deepseek.com/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+    -d "$(python3 - "$CONFIG_FILE" "$MESSAGES" <<'PY'
+import json
+import sys
+
+def load_config(path):
+    lines = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip().startswith("//"):
+                continue
+            lines.append(line)
+    return json.loads("".join(lines))
+
+try:
+    config = load_config(sys.argv[1])
+except Exception as e:
+    print(f"Error: could not parse config: {e}")
+    sys.exit(1)
+
+messages = json.loads(sys.argv[2])
+
+thinking = {"type": config.get("thinking", "enabled")}
+if thinking["type"] == "enabled":
+    thinking["reasoning_effort"] = config.get("reasoning_effort", "high")
+
+request = {
+    "model": config.get("model", "deepseek-v4-flash"),
+    "messages": messages,
+    "temperature": float(config.get("temperature", 1)),
+    "top_p": float(config.get("top_p", 1)),
+    "thinking": thinking,
+    "response_format": {"type": config.get("response_format", "text")},
+}
+
+print(json.dumps(request))
+PY
+)")
+
+# Extract the answer
+ANSWER=$(python3 - "$CONFIG_FILE" "$RESPONSE" <<'PY'
+import json
+import sys
+
+def load_config(path):
+    lines = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip().startswith("//"):
+                continue
+            lines.append(line)
+    return json.loads("".join(lines))
+
+try:
+    config = load_config(sys.argv[1])
+except Exception as e:
+    print(f"Error: could not parse config: {e}")
+    sys.exit(1)
+
+raw = sys.argv[2]
+
+try:
+    data = json.loads(raw)
+
+    if "choices" in data:
+        print(data["choices"][0]["message"]["content"])
+    elif "error" in data:
+        print("API error:", data["error"].get("message", data["error"]))
+        sys.exit(1)
+    else:
+        print("Unexpected API response:")
+        print(json.dumps(data, indent=2))
+        sys.exit(1)
+
+except json.JSONDecodeError:
+    print("Invalid response from API:")
+    print(raw)
+    sys.exit(1)
+PY
+)
+
+# Save question and answer to history
+if [ "$SAVE_HISTORY" = "y" ]; then
+    python3 - "$HISTORY_FILE" "$QUESTION" "$ANSWER" <<'PY'
+import json
+import sys
+
+history_file = sys.argv[1]
+question = sys.argv[2]
+answer = sys.argv[3]
+
+with open(history_file, "a", encoding="utf-8") as f:
+    f.write(json.dumps({
+        "role": "user",
+        "content": question
+    }) + "\n")
+
+    f.write(json.dumps({
+        "role": "assistant",
+        "content": answer
+    }) + "\n")
+PY
+fi
+
+# Display only the answer
+printf '%s\n' "$ANSWER"

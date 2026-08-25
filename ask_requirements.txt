@@ -1,0 +1,9 @@
+Requirements to run he ask (deepseek) script:
+
+- bash (script is #!/bin/bash)
+- python3 (stdlib only: json, sys — no pip packages needed)
+- curl (API calls)
+- coreutils (mkdir, cat, rm, touch, printf, read) — present on any Linux/macOS
+- Network access to api.deepseek.com
+- DEEPSEEK_API_KEY env var set (only needed for asking questions, not for -h/-r/-e/-s/-d)
+- $EDITOR optional — only used by ask -e, falls back to vi
